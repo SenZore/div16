@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#20231f">
-  <meta name="description" content="Find the nearest Minecraft coordinates divisible by 16, and calculate exact coordinate division.">
+  <meta name="description" content="Align Minecraft coordinates to multiples of 16 or convert between Overworld and Nether coordinates with exact results.">
   <title>div16 · Minecraft coordinate calculator</title>
   <style>
     :root { color-scheme: dark; --bg: #20231f; --surface: #2b2e29; --inset: #22251f; --border: #50564b; --text: #f0f1e9; --muted: #bdc2b6; --green: #b3d779; --ink: #202a16; --error: #ffb8a8; }
     * { box-sizing: border-box; }
     body { margin: 0; background: var(--bg); color: var(--text); font-family: "Segoe UI", Arial, sans-serif; line-height: 1.5; }
-    button, input { font: inherit; }
+    button, input, select { font: inherit; }
     button { cursor: pointer; }
     button:disabled { cursor: default; opacity: .6; }
     :focus-visible { outline: 3px solid var(--green); outline-offset: 4px; }
@@ -27,6 +27,8 @@
     .calculator { border: 1px solid var(--border); background: var(--surface); }
     form { padding: 28px; }
     .form-heading { margin: 0 0 22px; font-size: 18px; font-weight: 600; }
+    .mode-field { margin-bottom: 26px; }
+    select { width: 100%; min-height: 48px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 0; color: var(--text); background: var(--inset); }
     .fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
     label { display: block; font-size: 15px; font-weight: 700; margin-bottom: 9px; }
     label span { font-weight: 400; color: var(--muted); font-size: 13px; margin-left: 6px; }
@@ -92,9 +94,18 @@
     </header>
     <main>
       <h1>Line up your coordinates.</h1>
-      <p class="intro">Find the closest Minecraft coordinates divisible by 16, and see the exact result of dividing each axis.</p>
+      <p class="intro">Align your Minecraft coordinates to multiples of 16, or convert between the Overworld and the Nether.</p>
       <div class="calculator">
         <form id="calculator-form" novalidate>
+          <div class="mode-field">
+            <label for="mode">Calculator</label>
+            <select id="mode" name="mode" aria-describedby="mode-hint">
+              <option value="align">16-block alignment</option>
+              <option value="to-nether">Overworld to Nether</option>
+              <option value="to-overworld">Nether to Overworld</option>
+            </select>
+            <p class="hint" id="mode-hint">Find the nearest multiple of 16 and the exact division for each axis.</p>
+          </div>
           <h2 class="form-heading">Your coordinates</h2>
           <div class="fields">
             <div>
@@ -122,18 +133,18 @@
         <section class="results" aria-labelledby="results-title">
           <div class="results-heading">
             <h2 id="results-title">Results</h2>
-            <span>Divisor: 16</span>
+            <span id="result-caption">Divisor: 16</span>
           </div>
           <div id="empty" class="empty" role="status">
             <p><strong>Where are you building?</strong><span id="empty-message">Enter X and Z, then select Calculate.</span></p>
           </div>
           <div id="result-data" hidden>
             <table aria-label="Coordinate calculations">
-              <thead><tr><th scope="col">Axis</th><th scope="col">Closest multiple of 16</th><th scope="col">Exact ÷ 16</th></tr></thead>
+              <thead><tr><th scope="col">Axis</th><th scope="col" id="nearest-heading">Closest multiple of 16</th><th scope="col" id="exact-heading">Exact ÷ 16</th></tr></thead>
               <tbody id="result-rows"></tbody>
             </table>
             <div class="coordinate-bar">
-              <div><p class="coordinate-label">Closest coordinates</p><p id="coordinates"></p></div>
+              <div><p class="coordinate-label" id="coordinate-label">Closest coordinates</p><p id="coordinates"></p></div>
               <button id="copy" type="button">Copy coordinates</button>
             </div>
             <p id="copy-status" role="status" hidden></p>
@@ -142,8 +153,8 @@
         </section>
       </div>
       <div class="notes">
-        <p><strong>Closest means nearest.</strong>Each axis snaps to a multiple of 16. If two are equally close, we choose the one closer to zero.</p>
-        <p><strong>Exact means unrounded.</strong>The original coordinate is divided by 16. When supplied, Y is calculated the same way as X and Z.</p>
+        <p><strong id="nearest-note-title">Closest means nearest.</strong><span id="nearest-note">Each axis snaps to a multiple of 16. If two are equally close, we choose the one closer to zero.</span></p>
+        <p><strong id="exact-note-title">Exact means unrounded.</strong><span id="exact-note">The original coordinate is divided by 16. When supplied, Y is calculated the same way as X and Z.</span></p>
       </div>
       <noscript><p>This calculator needs JavaScript enabled in your browser.</p></noscript>
     </main>
@@ -151,6 +162,7 @@
   </div>
   <script>
     const form = document.getElementById('calculator-form');
+    const mode = document.getElementById('mode');
     const inputs = ['x', 'y', 'z'].map(axis => document.getElementById(axis));
     const empty = document.getElementById('empty');
     const resultData = document.getElementById('result-data');
@@ -169,13 +181,16 @@
       return (negative ? '-' : '') + digits.slice(0, -places) + (fraction ? '.' + fraction : '');
     }
 
-    function calculateCoordinate(raw) {
+    function parseCoordinate(raw) {
       const match = /^([+-]?)(\d{1,24})(?:\.(\d{1,12}))?$/.exec(raw);
       if (!match) throw new Error('Use a number with up to 24 whole digits and 12 decimal places.');
       const places = (match[3] || '').length;
       const scale = 10n ** BigInt(places);
       const value = BigInt(match[2] + (match[3] || '')) * (match[1] === '-' ? -1n : 1n);
-      const step = 16n * scale;
+      return { places, scale, value, original: decimalText(value, places) };
+    }
+
+    function nearestMultiple(value, step) {
       let quotient = value / step;
       if (value < 0n && value % step !== 0n) quotient -= 1n;
       const lower = quotient * step;
@@ -184,14 +199,56 @@
       const upperDistance = upper - value;
       let nearest = lowerDistance < upperDistance ? lower : upper;
       if (lowerDistance === upperDistance) nearest = value < 0n ? upper : lower;
+      return nearest;
+    }
+
+    function calculateCoordinate(raw) {
+      const { places, scale, value, original } = parseCoordinate(raw);
+      const step = 16n * scale;
+      const nearest = nearestMultiple(value, step);
       const adjustment = nearest - value;
       return {
-        original: decimalText(value, places),
+        original,
         nearest: decimalText(nearest, places),
         nearestQuotient: (nearest / step).toString(),
         exact: decimalText(value * 625n, places + 4),
         adjustment: (adjustment > 0n ? '+' : '') + decimalText(adjustment, places)
       };
+    }
+
+    function convertCoordinate(raw, axis, direction) {
+      const parsed = parseCoordinate(raw);
+      const toNether = direction === 'to-nether';
+      const value = axis === 'Y' ? parsed.value : parsed.value * (toNether ? 125n : 8n);
+      const places = parsed.places + (axis !== 'Y' && toNether ? 3 : 0);
+      const exact = decimalText(value, places);
+      const scale = 10n ** BigInt(places);
+      const nearest = axis === 'Y' ? value : nearestMultiple(value, scale);
+      const adjustment = nearest - value;
+      return {
+        exact,
+        nearest: decimalText(nearest, places),
+        nearestDetail: axis === 'Y' ? 'Y unchanged' : (adjustment > 0n ? '+' : '') + decimalText(adjustment, places) + ' blocks from exact',
+        exactDetail: axis === 'Y' ? 'Y unchanged' : parsed.original + (toNether ? ' ÷ 8' : ' × 8')
+      };
+    }
+
+    function updateMode() {
+      const alignment = mode.value === 'align';
+      const toNether = mode.value === 'to-nether';
+      const destination = toNether ? 'Nether' : 'Overworld';
+      const texts = {
+        'mode-hint': alignment ? 'Find the nearest multiple of 16 and the exact division for each axis.' : (toNether ? 'Enter Overworld coordinates. X and Z are divided by 8; Y stays unchanged.' : 'Enter Nether coordinates. X and Z are multiplied by 8; Y stays unchanged.'),
+        'result-caption': alignment ? 'Divisor: 16' : (toNether ? 'X/Z ÷ 8 · Y unchanged' : 'X/Z × 8 · Y unchanged'),
+        'nearest-heading': alignment ? 'Closest multiple of 16' : 'Nearest block',
+        'exact-heading': alignment ? 'Exact ÷ 16' : 'Exact ' + destination,
+        'coordinate-label': alignment ? 'Closest coordinates' : destination + ' coordinates (nearest blocks)',
+        'nearest-note-title': alignment ? 'Closest means nearest.' : 'Whole blocks for X and Z.',
+        'nearest-note': alignment ? 'Each axis snaps to a multiple of 16. If two are equally close, we choose the one closer to zero.' : 'Converted X and Z round to the nearest whole block. Ties choose the block closer to zero. Y is kept as entered.',
+        'exact-note-title': alignment ? 'Exact means unrounded.' : 'An 8:1 coordinate conversion.',
+        'exact-note': alignment ? 'The original coordinate is divided by 16. When supplied, Y is calculated the same way as X and Z.' : 'Only X and Z scale between dimensions. The exact result is unrounded; choose a suitable Y height for your portal.'
+      };
+      for (const [id, text] of Object.entries(texts)) document.getElementById(id).textContent = text;
     }
 
     function clearError(input) {
@@ -226,8 +283,10 @@
         const raw = input.value.trim();
         if (!raw && input.id === 'y') continue;
         try {
-          if (!raw) throw new Error('Enter a ' + input.id.toUpperCase() + ' coordinate.');
-          results.push({ axis: input.id.toUpperCase(), ...calculateCoordinate(raw) });
+          if (!raw) throw new Error('Enter ' + (input.id === 'x' ? 'an X' : 'a Z') + ' coordinate.');
+          const axis = input.id.toUpperCase();
+          const result = mode.value === 'align' ? calculateCoordinate(raw) : convertCoordinate(raw, axis, mode.value);
+          results.push({ axis, ...result });
         } catch (error) {
           const errorElement = document.getElementById(input.id + '-error');
           errorElement.textContent = error.message;
@@ -243,8 +302,8 @@
         axis.textContent = result.axis;
         row.append(axis);
         for (const [value, detail] of [
-          [result.nearest, result.adjustment + ' blocks · ÷16 = ' + result.nearestQuotient],
-          [result.exact, result.original + ' ÷ 16']
+          [result.nearest, result.nearestDetail ?? result.adjustment + ' blocks · ÷16 = ' + result.nearestQuotient],
+          [result.exact, result.exactDetail ?? result.original + ' ÷ 16']
         ]) {
           const cell = document.createElement('td');
           const number = document.createElement('div');
@@ -271,7 +330,15 @@
       clearResults('Coordinates changed. Select Calculate to update your results.');
     }));
 
-    form.addEventListener('reset', () => {
+    mode.addEventListener('change', () => {
+      inputs.forEach(clearError);
+      clearResults('Calculator changed. Select Calculate to update your results.');
+      updateMode();
+    });
+
+    form.addEventListener('reset', event => {
+      event.preventDefault();
+      inputs.forEach(input => { input.value = ''; });
       inputs.forEach(clearError);
       clearResults('Enter X and Z, then select Calculate.');
       inputs[0].focus();
